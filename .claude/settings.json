@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(.env)",
+      "Read(*.key)",
+      "Read(*.pem)",
+      "Read(*.crt)",
+      "Read(*.config)",
+      "Read(*.cfg)",
+      "Read(*.ini)",
+      "Read(*.secret)",
+      "Read(*.password)",
+      "Read(*.env.*)",
+      "Read(*.key.*)",
+      "Read(*.pem.*)",
+      "Read(*.crt.*)",
+      "Read(*.config.*)",
+      "Read(*.cfg.*)"
+    ]
+  },
+  "alwaysThinkingEnabled": true,
+  "autoMemoryEnabled": true,
+  "effortLevel": "low"
+}
