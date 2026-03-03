@@ -19,6 +19,9 @@ Python CLI pipeline: read leads from Google Sheets → generate personalized Lin
 - Test first: BATCH_SIZE=1 python linkedin_cold_agent.py
 - Full run: python linkedin_cold_agent.py
 
+## Exclusion list
+The exclusion list (Core Email DB) filters out companies already in our sales pipeline. EXCLUSION_SPREADSHEET_ID is optional — if not set, the step is skipped with a warning.
+
 ## Common mistakes
 - Check docs/mistakes.md before making changes
 - gspread rate limit: 60 req/min. Use batch+delay pattern.

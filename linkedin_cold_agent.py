@@ -29,6 +29,8 @@ GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
 HEYREACH_API_KEY: str = os.getenv("HEYREACH_API_KEY", "")
 HEYREACH_LIST_ID: str = os.getenv("HEYREACH_LIST_ID", "")
+EXCLUSION_SPREADSHEET_ID: str = os.getenv("EXCLUSION_SPREADSHEET_ID", "")
+EXCLUSION_SHEET_NAME: str = os.getenv("EXCLUSION_SHEET_NAME", "Reality")
 BATCH_SIZE: int = int(os.getenv("BATCH_SIZE", "5"))
 RATE_LIMIT_DELAY: float = float(os.getenv("RATE_LIMIT_DELAY", "2.0"))
 
@@ -224,6 +226,43 @@ def deduplicate_leads(leads: list[Lead], existing_urls: set[str]) -> list[Lead]:
         logger.info("Skipped %d already-processed lead(s)", skipped)
     logger.info("%d new lead(s) queued for processing", len(new_leads))
     return new_leads
+
+
+def exclude_existing_clients(client: gspread.Client, leads: list[Lead]) -> list[Lead]:
+    """Filter out leads whose company_domain matches an existing client domain.
+
+    Reads the 'company' column from EXCLUSION_SHEET_NAME in EXCLUSION_SPREADSHEET_ID.
+    Each value may have a leading '@' which is stripped to get a bare domain.
+    Comparison is case-insensitive with whitespace stripped.
+
+    Returns leads unchanged (with a warning) if EXCLUSION_SPREADSHEET_ID is not set.
+    """
+    if not EXCLUSION_SPREADSHEET_ID:
+        logger.warning("EXCLUSION_SPREADSHEET_ID is not set — skipping client exclusion filter")
+        return leads
+
+    logger.info(
+        "Reading exclusion list from '%s', tab '%s'",
+        EXCLUSION_SPREADSHEET_ID, EXCLUSION_SHEET_NAME,
+    )
+    sh = client.open_by_key(EXCLUSION_SPREADSHEET_ID)
+    ws = sh.worksheet(EXCLUSION_SHEET_NAME)
+    records = ws.get_all_records()
+
+    excluded_domains: set[str] = set()
+    for row in records:
+        val = row.get("company") or row.get("Company") or ""
+        domain = str(val).strip().lstrip("@").lower()
+        if domain:
+            excluded_domains.add(domain)
+
+    logger.info("Loaded %d excluded domain(s) from exclusion sheet", len(excluded_domains))
+
+    filtered = [l for l in leads if l.company_domain.strip().lower() not in excluded_domains]
+    excluded_count = len(leads) - len(filtered)
+    if excluded_count:
+        logger.info("Excluded %d lead(s) matching existing client domain(s)", excluded_count)
+    return filtered
 
 
 def append_batch(ws: gspread.Worksheet, leads: list[Lead]) -> None:
@@ -464,6 +503,12 @@ def run() -> None:
     new_leads = deduplicate_leads(all_leads, existing_urls)
     if not new_leads:
         logger.info("All leads already processed — nothing to do")
+        return
+
+    # 4b. Exclude existing clients
+    new_leads = exclude_existing_clients(client, new_leads)
+    if not new_leads:
+        logger.info("All remaining leads belong to existing clients — nothing to do")
         return
 
     # 5. Process in batches
