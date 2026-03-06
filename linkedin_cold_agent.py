@@ -10,7 +10,8 @@ from dataclasses import dataclass, field
 from itertools import islice
 from typing import Any, Iterator
 
-import google.generativeai as genai
+from google import genai
+from google.genai import types as genai_types
 import gspread
 import requests
 from dotenv import load_dotenv
@@ -600,26 +601,23 @@ def append_batch(ws: gspread.Worksheet, leads: list[Lead]) -> None:
 # Gemini message generation
 # ---------------------------------------------------------------------------
 
-_gemini_model: genai.GenerativeModel | None = None
+_gemini_client: genai.Client | None = None
 
 
-def init_gemini() -> genai.GenerativeModel:
-    """Configure the Gemini client and return a reusable GenerativeModel instance.
+def init_gemini() -> genai.Client:
+    """Initialise and cache a Gemini REST client.
 
-    Configures the API key once and caches the model so it is not re-created
-    on every call to generate_linkedin_message().
+    Uses the new google-genai package (REST transport) to avoid gRPC credential
+    issues that caused the deprecated google-generativeai package to hang on
+    remote runners.
     """
-    global _gemini_model
-    if _gemini_model is not None:
-        return _gemini_model
+    global _gemini_client
+    if _gemini_client is not None:
+        return _gemini_client
     logger.info("Initialising Gemini client (model: %s)", GEMINI_MODEL)
-    genai.configure(api_key=GEMINI_API_KEY)
-    _gemini_model = genai.GenerativeModel(
-        model_name=GEMINI_MODEL,
-        system_instruction=SYSTEM_PROMPT,
-    )
+    _gemini_client = genai.Client(api_key=GEMINI_API_KEY)
     logger.info("Gemini client ready")
-    return _gemini_model
+    return _gemini_client
 
 
 def _build_prompt(lead: Lead) -> str:
@@ -655,14 +653,20 @@ def generate_linkedin_message(lead: Lead) -> str:
     Returns '(generation_failed)' if the API call raises any exception,
     and sleeps for RATE_LIMIT_DELAY regardless of success or failure.
     """
-    model = init_gemini()
+    client = init_gemini()
     prompt = _build_prompt(lead)
     logger.debug(
         "Sending prompt to Gemini for %s %s (%s)",
         lead.first_name, lead.last_name, lead.linkedin_profile,
     )
     try:
-        response = model.generate_content(prompt)
+        response = client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=prompt,
+            config=genai_types.GenerateContentConfig(
+                system_instruction=SYSTEM_PROMPT,
+            ),
+        )
         message = _strip_quotes(response.text)
         logger.info(
             "Message generated for %s %s at %s (%d chars)",
