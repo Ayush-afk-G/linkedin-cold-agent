@@ -4,6 +4,7 @@
 import logging
 import os
 import sys
+import math
 import time
 from dataclasses import dataclass, field
 from itertools import islice
@@ -33,6 +34,7 @@ EXCLUSION_SPREADSHEET_ID: str = os.getenv("EXCLUSION_SPREADSHEET_ID", "")
 EXCLUSION_SHEET_NAME: str = os.getenv("EXCLUSION_SHEET_NAME", "Reality")
 BATCH_SIZE: int = int(os.getenv("BATCH_SIZE", "5"))
 RATE_LIMIT_DELAY: float = float(os.getenv("RATE_LIMIT_DELAY", "2.0"))
+MAX_LEADS: int = int(os.getenv("MAX_LEADS", "0"))  # 0 = no limit
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -50,11 +52,43 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 SPECTATR_CONTEXT = """
-Spectatr.ai is a sports analytics platform with four core products:
-- PULSE: real-time fan sentiment analytics — tracks how fans feel about teams, players, and events across social media and beyond.
-- AXIS: multi-platform data aggregation — unifies data streams from ticketing, social, broadcast, and sponsorship into a single view.
-- JORDY AI: AI-powered insights assistant — answers natural-language questions about fan behaviour and performance metrics instantly.
-- BRAND GAUGE: sponsorship effectiveness measurement — quantifies the ROI of brand partnerships inside sports properties.
+Spectatr.ai — Sports Technology of the Year award-winning AI platform.
+
+PRODUCTS:
+
+PULSE — AI Highlights
+- Auto-generates personalised match highlights from live or recorded footage in near real-time
+- 9:16, 16:9, and 4:5 clips ready for Instagram, TikTok, YouTube Shorts within seconds of key moments
+- Eliminates manual editing — content teams focus on storytelling, not production
+- Best for: Leagues, broadcasters, and event orgs with content volume or turnaround problems
+- Case study: HockeyOne (Australia, 2025) — 9,500+ AI clips, 10.6M views, 9x fan engagement growth,
+  264% Facebook reach increase during global expansion season
+- Case study: NSL Canada (2025) — 37K+ moments captured across 80 matches, 51.8M video views,
+  2x Instagram follower growth in inaugural season
+- Case study: ANOC / ISG Riyadh 2025 — 50,000+ clips across 20+ sports, 7.5M views,
+  57 NOCs each receiving daily athlete highlights for the first time
+- Case study: Table Tennis England (2025) — 250+ hours saved, 105% surge in total views,
+  45% engagement uplift, uploads scaled 3x without extra editing workload
+
+AXIS — Media Management
+- AI-based auto-tagging to index, search, discover, and share digital assets in near real-time
+- Searchable by player names, action types, match stages, and contextual tags
+- Eliminates manual tagging across live and recorded content, enables multi-platform distribution
+- Best for: Media teams, broadcast ops, content managers who need to manage and repurpose large archives
+- Case study: Table Tennis England — unstructured video archive transformed into fully indexed,
+  searchable media library; team scaled from ~1 to ~10 uploads/month without added editing workload
+
+JORDY AI — AI Fan Agent
+- Sports-native AI fan agent (not a generic LLM wrapper) — understands game nuance, player context, and match moments
+- Pull model (reactive): answers fan questions on stats, standings, player deep-dives, match facts in real-time
+- Push model (proactive): triggers personalised ticket offers, merchandise, gamification (polls/trivia),
+  geo-gated content based on fan buying intent — pull drives engagement, push drives monetization
+- Hyper-personalisation via fan persona, interaction history, team/player affinity, geography, engagement depth
+- Fully white-labeled — deploys into the org's existing app or as a standalone experience
+- Built-in revenue engine: fan intent mapping → AI logic → merchandise/brand content/ticket conversions
+- Case study: FantasyAlarm (USA, Sep 2025) — +13% revenue uplift, 27.3% season-long user retention,
+  10 queries/user/week
+- Best for: Leagues, teams, and broadcasters with a large fanbase wanting to deepen engagement and monetize fans
 """.strip()
 
 # ---------------------------------------------------------------------------
@@ -62,18 +96,37 @@ Spectatr.ai is a sports analytics platform with four core products:
 # ---------------------------------------------------------------------------
 
 SYSTEM_PROMPT = """
-You are a sales development representative at Spectatr.ai writing personalised LinkedIn outreach messages.
+You are a senior B2B outreach strategist for Spectatr.ai — a Sports Technology of the Year award-winning AI platform that helps sports organisations automate content workflows and maximise fan engagement.
 
 {spectatr_context}
 
-Rules:
-- Write a single short message (max 300 characters including spaces).
-- Address the lead by first name.
-- Reference their specific role and/or company to show you did your research.
-- Naturally mention exactly one Spectatr.ai product that is most relevant to their context.
-- Do NOT use generic openers like "I came across your profile" or "Hope this finds you well".
-- Sound like a human, not a marketing email. No bullet points, no subject line, no sign-off.
-- Output only the message body — nothing else.
+YOUR TASK:
+1. Analyse the person — title, seniority, department
+2. Analyse the company — type, size, geography. Assess whether it is a Tier 1 org: major professional leagues (NFL, NBA, MLB, Premier League, etc.), global broadcasters (ESPN, Sky Sports, DAZN, etc.), or organisations with millions of fans/viewers.
+3. Match the single most relevant Spectatr.ai product to their role:
+   - If the company is Tier 1, strongly default to JORDY AI — they have the fanbase to fully exploit its monetization engine. Only override to PULSE or AXIS if the person's role is explicitly content creation, production, or media archive management.
+   - PULSE: content creation, social media, digital, broadcast, marketing roles — anyone responsible for producing or distributing match content
+   - AXIS: media operations, archive management, content library roles — anyone managing large volumes of existing footage
+   - JORDY AI: fan engagement, digital product, commercial, partnership, and general leadership roles — especially at Tier 1 orgs
+4. Pick ONE personalisation hook (strongest signal first):
+   - Pain point implied by their role + department + company size
+   - Geography — reference the most relevant case study:
+     * Multi-sport event orgs → ANOC / ISG Riyadh
+     * Emerging or new leagues → NSL Canada
+     * Domestic leagues expanding reach → HockeyOne
+     * Smaller orgs or niche sports → Table Tennis England
+     * Fan monetization → FantasyAlarm
+   - New in role (< 6 months) — opportunity to make an early impact
+5. Write the message:
+   - 2–3 sentences MAXIMUM
+   - Do NOT open with "I came across your profile", "Hope this finds you well", or any generic opener
+   - Name ONE product and ONE specific outcome or metric
+   - Naturally reference the most contextually relevant case study metric where it fits
+   - End with a soft question — never "book a call" or "schedule a demo"
+   - Never use: synergy, leverage, game-changer, revolutionary, innovative, cutting-edge
+   - Sound like a human peer, not a marketing email
+   - No bullet points, no subject line, no sign-off
+   - Output only the message body — nothing else
 """.strip().format(spectatr_context=SPECTATR_CONTEXT)
 
 # ---------------------------------------------------------------------------
@@ -87,9 +140,34 @@ OUTPUT_HEADERS: list[str] = [
     "first_name",
     "last_name",
     "job_title",
+    "department",
+    "seniority",
+    "industry",
+    "employees",
+    "country",
     "location",
     "linkedin_profile",
     "personalised_message",
+    "score",
+]
+
+SKIPPED_SHEET_NAME: str = "Skipped"
+SKIPPED_HEADERS: list[str] = [
+    "company_name",
+    "company_domain",
+    "full_name",
+    "first_name",
+    "last_name",
+    "job_title",
+    "department",
+    "seniority",
+    "industry",
+    "employees",
+    "keywords",
+    "country",
+    "location",
+    "linkedin_profile",
+    "skip_reason",
 ]
 
 # ---------------------------------------------------------------------------
@@ -104,48 +182,89 @@ class Lead:
     first_name: str
     last_name: str
     job_title: str
+    department: str
+    seniority: str
+    industry: str
+    employees: str
+    keywords: str
+    country: str
     location: str
     linkedin_profile: str
     personalised_message: str = ""
+    score: int = 0
 
     @classmethod
     def from_sheet_row(cls, row: dict[str, Any]) -> "Lead":
-        """Construct a Lead from a gspread get_all_records() row dict.
-
-        Tries multiple common column-name variants so the sheet header casing
-        doesn't need to be exact.
-        """
+        """Construct a Lead from an Apollo.io-enriched gspread row dict."""
         def get(*keys: str) -> str:
             for k in keys:
-                v = row.get(k) or row.get(k.lower()) or row.get(k.replace("_", " ").title()) or ""
+                v = row.get(k) or ""
                 if v:
                     return str(v).strip()
             return ""
 
+        first_name = get("First Name", "first_name")
+        last_name = get("Last Name", "last_name")
+        country = get("Country", "country")
+        location_parts = [get("City"), get("State"), country]
+        location = ", ".join(p for p in location_parts if p)
+
         return cls(
-            company_name=get("company_name", "Company Name", "Company"),
-            company_domain=get("company_domain", "Company Domain", "Domain"),
-            full_name=get("full_name", "Full Name", "Name"),
-            first_name=get("first_name", "First Name"),
-            last_name=get("last_name", "Last Name"),
-            job_title=get("job_title", "Job Title", "Title"),
-            location=get("location", "Location"),
-            linkedin_profile=get("linkedin_profile", "LinkedIn Profile", "LinkedIn URL", "linkedin_url"),
+            company_name=get("Company Name", "company_name"),
+            company_domain=get("Website", "company_domain"),
+            first_name=first_name,
+            last_name=last_name,
+            full_name=f"{first_name} {last_name}".strip(),
+            job_title=get("Title", "job_title"),
+            department=get("Departments", "department"),
+            seniority=get("Seniority", "seniority"),
+            industry=get("Industry", "industry"),
+            employees=get("# Employees", "employees"),
+            keywords=get("Keywords", "keywords"),
+            country=country,
+            location=location,
+            linkedin_profile=get("Person Linkedin Url", "linkedin_profile"),
         )
 
-    def to_sheet_row(self) -> list[str]:
-        """Return values in the same order as OUTPUT_HEADERS."""
-        return [
-            self.company_name,
-            self.company_domain,
-            self.full_name,
-            self.first_name,
-            self.last_name,
-            self.job_title,
-            self.location,
-            self.linkedin_profile,
-            self.personalised_message,
-        ]
+    def to_sheet_row(self) -> dict[str, str]:
+        """Return a field→value dict keyed by OUTPUT_HEADERS names."""
+        return {
+            "company_name": self.company_name,
+            "company_domain": self.company_domain,
+            "full_name": self.full_name,
+            "first_name": self.first_name,
+            "last_name": self.last_name,
+            "job_title": self.job_title,
+            "department": self.department,
+            "seniority": self.seniority,
+            "industry": self.industry,
+            "employees": self.employees,
+            "country": self.country,
+            "location": self.location,
+            "linkedin_profile": self.linkedin_profile,
+            "personalised_message": self.personalised_message,
+            "score": str(self.score),
+        }
+
+    def to_skipped_row(self, skip_reason: str) -> dict[str, str]:
+        """Return a field→value dict keyed by SKIPPED_HEADERS names."""
+        return {
+            "company_name": self.company_name,
+            "company_domain": self.company_domain,
+            "full_name": self.full_name,
+            "first_name": self.first_name,
+            "last_name": self.last_name,
+            "job_title": self.job_title,
+            "department": self.department,
+            "seniority": self.seniority,
+            "industry": self.industry,
+            "employees": self.employees,
+            "keywords": self.keywords,
+            "country": self.country,
+            "location": self.location,
+            "linkedin_profile": self.linkedin_profile,
+            "skip_reason": skip_reason,
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -173,17 +292,26 @@ def read_source_leads(client: gspread.Client) -> list[Lead]:
     sh = client.open_by_key(SPREADSHEET_ID)
     ws = sh.worksheet(SOURCE_SHEET_NAME)
     records = ws.get_all_records()
-    leads = [Lead.from_sheet_row(r) for r in records if r]
+    leads = [Lead.from_sheet_row(r) for r in records if r.get("Person Linkedin Url", "").strip()]
     logger.info("Read %d leads from '%s'", len(leads), SOURCE_SHEET_NAME)
     return leads
 
 
 def ensure_output_tab(client: gspread.Client) -> gspread.Worksheet:
-    """Return the output worksheet, creating it with headers if it does not exist."""
+    """Return the output worksheet, creating it with headers if it does not exist.
+
+    If the tab already exists but has outdated headers, row 1 is updated to
+    match OUTPUT_HEADERS so that header-name-based writes always land in the
+    right column.
+    """
     sh = client.open_by_key(SPREADSHEET_ID)
     try:
         ws = sh.worksheet(OUTPUT_SHEET_NAME)
         logger.info("Found existing output tab '%s'", OUTPUT_SHEET_NAME)
+        existing_headers = ws.row_values(1)
+        if existing_headers != OUTPUT_HEADERS:
+            ws.update("A1", [OUTPUT_HEADERS])
+            logger.info("Updated output tab headers to match OUTPUT_HEADERS")
     except gspread.WorksheetNotFound:
         logger.info("Output tab '%s' not found — creating it", OUTPUT_SHEET_NAME)
         ws = sh.add_worksheet(title=OUTPUT_SHEET_NAME, rows=1000, cols=len(OUTPUT_HEADERS))
@@ -200,13 +328,31 @@ def normalize_linkedin_url(url: str) -> str:
     return url.strip().lower().rstrip("/") + "/"
 
 
+def get_existing_skipped_urls(ws: gspread.Worksheet) -> set[str]:
+    """Return the set of normalised LinkedIn URLs already present in the Skipped tab."""
+    headers = ws.row_values(1)
+    try:
+        col_index = headers.index("linkedin_profile") + 1
+    except ValueError:
+        return set()
+    raw_urls = ws.col_values(col_index)
+    return {normalize_linkedin_url(u) for u in raw_urls[1:] if u}
+
+
 def get_existing_linkedin_urls(ws: gspread.Worksheet) -> set[str]:
     """Return the set of normalised LinkedIn URLs already present in the output tab.
 
-    Reads column 8 (linkedin_profile) and skips the header row.
+    Looks up the linkedin_profile column by header name so the position is
+    not hard-coded and survives column reordering.
     """
-    raw_urls = ws.col_values(8)  # column 8 = linkedin_profile
-    existing = {normalize_linkedin_url(u) for u in raw_urls[1:] if u}
+    headers = ws.row_values(1)
+    try:
+        col_index = headers.index("linkedin_profile") + 1  # 1-indexed
+    except ValueError:
+        logger.warning("'linkedin_profile' header not found in output sheet — skipping dedup")
+        return set()
+    raw_urls = ws.col_values(col_index)
+    existing = {normalize_linkedin_url(u) for u in raw_urls[1:] if u}  # skip header row
     logger.info(
         "Found %d already-processed LinkedIn URL(s) in '%s'",
         len(existing),
@@ -220,7 +366,7 @@ def deduplicate_leads(leads: list[Lead], existing_urls: set[str]) -> list[Lead]:
 
     Logs the number of skipped and remaining leads.
     """
-    new_leads = [l for l in leads if normalize_linkedin_url(l.linkedin_profile) not in existing_urls]
+    new_leads = [lead for lead in leads if normalize_linkedin_url(lead.linkedin_profile) not in existing_urls]
     skipped = len(leads) - len(new_leads)
     if skipped:
         logger.info("Skipped %d already-processed lead(s)", skipped)
@@ -265,6 +411,168 @@ def exclude_existing_clients(client: gspread.Client, leads: list[Lead]) -> list[
     return filtered
 
 
+def ensure_skipped_tab(client: gspread.Client) -> gspread.Worksheet:
+    """Return the Skipped worksheet, creating it with headers if it does not exist."""
+    sh = client.open_by_key(SPREADSHEET_ID)
+    try:
+        ws = sh.worksheet(SKIPPED_SHEET_NAME)
+        logger.info("Found existing skipped tab '%s'", SKIPPED_SHEET_NAME)
+        existing_headers = ws.row_values(1)
+        if existing_headers != SKIPPED_HEADERS:
+            ws.update("A1", [SKIPPED_HEADERS])
+            logger.info("Updated skipped tab headers to match SKIPPED_HEADERS")
+    except gspread.WorksheetNotFound:
+        ws = sh.add_worksheet(title=SKIPPED_SHEET_NAME, rows=5000, cols=len(SKIPPED_HEADERS))
+        ws.append_row(SKIPPED_HEADERS)
+        logger.info("Created skipped tab '%s'", SKIPPED_SHEET_NAME)
+    return ws
+
+
+def append_skipped(ws: gspread.Worksheet, leads: list[Lead], skip_reason: str) -> None:
+    """Append skipped leads to the Skipped tab with a reason column."""
+    if not leads:
+        return
+    sheet_headers = ws.row_values(1)
+    rows = [
+        [lead.to_skipped_row(skip_reason).get(h, "") for h in sheet_headers]
+        for lead in leads
+    ]
+    try:
+        ws.append_rows(rows, value_input_option="RAW")
+        logger.info("Appended %d lead(s) to '%s' (reason: %s)", len(leads), SKIPPED_SHEET_NAME, skip_reason)
+    except gspread.exceptions.APIError as exc:
+        logger.error("Skipped sheet append failed: %s", exc)
+        raise
+    finally:
+        time.sleep(RATE_LIMIT_DELAY)
+
+
+_KEYWORD_GATE_KEYWORDS: set[str] = {
+    "sports", "soccer", "football", "basketball", "baseball", "hockey", "tennis",
+    "cricket", "rugby", "golf", "athletics", "swimming", "cycling", "motorsport",
+    "esports", "league", "federation", "association", "union", "confederation",
+    "club", "broadcast", "broadcaster", "broadcasting", "media", "production",
+    "studio", "streaming", "entertainment", "olympic", "noc",
+}
+
+_KEYWORD_GATE_INDUSTRIES: set[str] = {
+    "sports", "media", "broadcasting", "entertainment", "recreation",
+}
+
+
+def filter_by_keyword_gate(leads: list[Lead]) -> tuple[list[Lead], list[Lead]]:
+    """Filter leads by sports/media keyword or industry match.
+
+    PASS if the Keywords field contains any target keyword OR the Industry field
+    contains any target industry (case-insensitive). Returns (passed, skipped).
+    """
+    passed, skipped = [], []
+    for lead in leads:
+        kw = lead.keywords.lower()
+        ind = lead.industry.lower()
+        kw_match = any(k in kw for k in _KEYWORD_GATE_KEYWORDS)
+        ind_match = any(i in ind for i in _KEYWORD_GATE_INDUSTRIES)
+        if kw_match or ind_match:
+            passed.append(lead)
+        else:
+            skipped.append(lead)
+    logger.info(
+        "%d lead(s) passed keyword gate, %d skipped",
+        len(passed), len(skipped),
+    )
+    return passed, skipped
+
+
+_TARGET_DEPARTMENTS: set[str] = {
+    "content", "marketing", "digital", "innovation", "tech",
+    "product", "media", "communications", "brand", "growth",
+}
+
+_TARGET_SENIORITY: set[str] = {
+    "vp", "vice president", "director", "head", "chief",
+    "c-level", "owner", "founder", "president", "partner", "managing",
+}
+
+
+def filter_by_department_and_seniority(leads: list[Lead]) -> tuple[list[Lead], list[Lead]]:
+    """Keep only leads whose department and seniority match target criteria.
+
+    Both department AND seniority must match (case-insensitive substring check).
+    Returns (passed, skipped).
+    """
+    passed, skipped = [], []
+    for lead in leads:
+        dept_match = any(t in lead.department.lower() for t in _TARGET_DEPARTMENTS)
+        seniority_match = any(t in lead.seniority.lower() for t in _TARGET_SENIORITY)
+        if dept_match and seniority_match:
+            passed.append(lead)
+        else:
+            skipped.append(lead)
+    logger.info(
+        "%d lead(s) passed department/seniority filter, %d skipped",
+        len(passed), len(skipped),
+    )
+    return passed, skipped
+
+
+def score_lead(lead: Lead) -> int:
+    """Score a lead 0–100 based on seniority, industry, company size, and department.
+
+    Used for prioritisation only — does not filter any leads out.
+    """
+    points = 0
+    s = lead.seniority.lower()
+    if any(t in s for t in ("chief", "c-suite", "president", "owner", "founder")):
+        points += 30
+    elif any(t in s for t in ("vp", "vice president")):
+        points += 25
+    elif any(t in s for t in ("director", "managing")):
+        points += 20
+    elif "head" in s:
+        points += 15
+    elif any(t in s for t in ("manager", "senior")):
+        points += 8
+    else:
+        points += 3
+
+    ind = lead.industry.lower()
+    if "sport" in ind:
+        points += 25
+    elif any(t in ind for t in ("media", "broadcast", "entertainment")):
+        points += 20
+    elif any(t in ind for t in ("recreation",)):
+        points += 10
+
+    try:
+        emp = int("".join(c for c in lead.employees if c.isdigit()) or "0")
+    except ValueError:
+        emp = 0
+    if emp >= 1000:
+        points += 25
+    elif emp >= 500:
+        points += 20
+    elif emp >= 200:
+        points += 15
+    elif emp >= 50:
+        points += 8
+    else:
+        points += 3
+
+    dept = lead.department.lower()
+    if any(t in dept for t in ("marketing", "digital", "content", "fan", "social", "growth")):
+        points += 20
+    elif any(t in dept for t in ("media", "broadcast", "production")):
+        points += 18
+    elif any(t in dept for t in ("commercial", "partnership", "sponsorship")):
+        points += 15
+    elif any(t in dept for t in ("tech", "innovation", "product")):
+        points += 10
+    else:
+        points += 3
+
+    return min(points, 100)
+
+
 def append_batch(ws: gspread.Worksheet, leads: list[Lead]) -> None:
     """Append a batch of processed leads to the output tab.
 
@@ -273,7 +581,11 @@ def append_batch(ws: gspread.Worksheet, leads: list[Lead]) -> None:
     if not leads:
         logger.debug("append_batch called with empty list — nothing to write")
         return
-    rows = [lead.to_sheet_row() for lead in leads]
+    sheet_headers = ws.row_values(1)
+    rows = [
+        [lead.to_sheet_row().get(h, "") for h in sheet_headers]
+        for lead in leads
+    ]
     try:
         ws.append_rows(rows, value_input_option="RAW")
         logger.info("Appended %d row(s) to '%s'", len(rows), OUTPUT_SHEET_NAME)
@@ -316,11 +628,13 @@ def _build_prompt(lead: Lead) -> str:
         f"Write a LinkedIn outreach message for this lead:\n"
         f"Name: {lead.first_name} {lead.last_name}\n"
         f"Title: {lead.job_title}\n"
+        f"Seniority: {lead.seniority}\n"
+        f"Department: {lead.department}\n"
         f"Company: {lead.company_name}\n"
-        f"Domain: {lead.company_domain}\n"
+        f"Industry: {lead.industry}\n"
+        f"Website: {lead.company_domain}\n"
+        f"Country: {lead.country}\n"
         f"Location: {lead.location}\n"
-        f"\n"
-        f"Spectatr context:\n{SPECTATR_CONTEXT}"
     )
 
 
@@ -445,7 +759,7 @@ def _chunked(iterable: list, size: int) -> Iterator[list]:
 
 
 def _validate_config() -> None:
-    """Raise SystemExit if any required env vars are missing."""
+    """Raise SystemExit if any required env vars are missing or invalid."""
     missing = []
     if not SPREADSHEET_ID:
         missing.append("SPREADSHEET_ID")
@@ -454,6 +768,9 @@ def _validate_config() -> None:
     if missing:
         for var in missing:
             logger.error("%s is not set — check your .env file", var)
+        sys.exit(1)
+    if HEYREACH_LIST_ID and not HEYREACH_LIST_ID.strip().isdigit():
+        logger.error("HEYREACH_LIST_ID must be a numeric value, got: %r", HEYREACH_LIST_ID)
         sys.exit(1)
 
 
@@ -481,8 +798,8 @@ def run() -> None:
     """
     logger.info("=== LinkedIn Cold Agent starting ===")
     logger.info(
-        "Config: BATCH_SIZE=%d  RATE_LIMIT_DELAY=%.1fs  model=%s",
-        BATCH_SIZE, RATE_LIMIT_DELAY, GEMINI_MODEL,
+        "Config: BATCH_SIZE=%d  RATE_LIMIT_DELAY=%.1fs  model=%s  MAX_LEADS=%s",
+        BATCH_SIZE, RATE_LIMIT_DELAY, GEMINI_MODEL, MAX_LEADS or "unlimited",
     )
 
     # 1. Validate config
@@ -495,8 +812,9 @@ def run() -> None:
         logger.info("Source tab is empty — nothing to do")
         return
 
-    # 3. Ensure output tab exists
+    # 3. Ensure output + skipped tabs exist
     output_ws = ensure_output_tab(client)
+    skipped_ws = ensure_skipped_tab(client)
 
     # 4. Deduplicate
     existing_urls = get_existing_linkedin_urls(output_ws)
@@ -511,8 +829,56 @@ def run() -> None:
         logger.info("All remaining leads belong to existing clients — nothing to do")
         return
 
+    # 4c. Streaming scan — filter and collect until MAX_LEADS qualified leads found.
+    # Only rows actually examined contribute to the Skipped sheet. Each lead is
+    # written to Skipped at most once across all runs (URL-based dedup).
+    existing_skipped_urls = get_existing_skipped_urls(skipped_ws)
+    qualified: list[Lead] = []
+    kw_skipped: list[Lead] = []
+    dept_skipped: list[Lead] = []
+    limit: float = MAX_LEADS if MAX_LEADS > 0 else float("inf")
+
+    for lead in new_leads:
+        if len(qualified) >= limit:
+            break
+
+        passed_kw, _ = filter_by_keyword_gate([lead])
+        if not passed_kw:
+            norm = normalize_linkedin_url(lead.linkedin_profile)
+            if norm not in existing_skipped_urls:
+                kw_skipped.append(lead)
+                existing_skipped_urls.add(norm)
+            continue
+
+        passed_dept, _ = filter_by_department_and_seniority([lead])
+        if not passed_dept:
+            norm = normalize_linkedin_url(lead.linkedin_profile)
+            if norm not in existing_skipped_urls:
+                dept_skipped.append(lead)
+                existing_skipped_urls.add(norm)
+            continue
+
+        qualified.append(lead)
+
+    append_skipped(skipped_ws, kw_skipped, "keyword_gate")
+    append_skipped(skipped_ws, dept_skipped, "dept_seniority_filter")
+    logger.info(
+        "Streaming scan complete: %d qualified, %d kw-skipped, %d dept-skipped",
+        len(qualified), len(kw_skipped), len(dept_skipped),
+    )
+
+    if not qualified:
+        logger.info("No leads passed all filters — nothing to do")
+        return
+
+    new_leads = qualified
+
+    # 4f. Score each lead
+    for lead in new_leads:
+        lead.score = score_lead(lead)
+
     # 5. Process in batches
-    total_batches = -(-len(new_leads) // BATCH_SIZE)  # ceiling division
+    total_batches = math.ceil(len(new_leads) / BATCH_SIZE)
     success_count = 0
     fail_count = 0
 

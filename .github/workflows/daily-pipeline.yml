@@ -1,0 +1,44 @@
+name: Daily LinkedIn Pipeline
+
+on:
+  schedule:
+    - cron: '0 8 * * *'  # 8:00 UTC every day (9am UK / 4am ET)
+
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Write Google credentials file
+        run: echo "$GOOGLE_CREDENTIALS_JSON" | base64 --decode > credentials.json
+        env:
+          GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
+
+      - name: Run pipeline
+        env:
+          # Secrets (sensitive)
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          HEYREACH_API_KEY: ${{ secrets.HEYREACH_API_KEY }}
+          HEYREACH_LIST_ID: ${{ secrets.HEYREACH_LIST_ID }}
+          EXCLUSION_SPREADSHEET_ID: ${{ secrets.EXCLUSION_SPREADSHEET_ID }}
+          # Config (not sensitive — edit here directly)
+          SOURCE_SHEET_NAME: 'ClayData.csv'
+          OUTPUT_SHEET_NAME: 'Leads_Personalized'
+          EXCLUSION_SHEET_NAME: 'Reality'
+          GEMINI_MODEL: 'gemini-3-flash-preview'
+          MAX_LEADS: '100'
+          BATCH_SIZE: '25'
+          RATE_LIMIT_DELAY: '2.0'
+        run: python linkedin_cold_agent.py
