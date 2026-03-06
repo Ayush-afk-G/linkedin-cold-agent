@@ -3,6 +3,12 @@ name: Daily LinkedIn Pipeline
 on:
   schedule:
     - cron: '0 8 * * *'  # 8:00 UTC every day (9am UK / 4am ET)
+  workflow_dispatch:
+    inputs:
+      max_leads:
+        description: 'MAX_LEADS override (leave blank for default)'
+        required: false
+        default: ''
 
 jobs:
   run-pipeline:
@@ -38,7 +44,7 @@ jobs:
           OUTPUT_SHEET_NAME: 'Leads_Personalized'
           EXCLUSION_SHEET_NAME: 'Reality'
           GEMINI_MODEL: 'gemini-3-flash-preview'
-          MAX_LEADS: '100'
+          MAX_LEADS: ${{ github.event.inputs.max_leads || '100' }}
           BATCH_SIZE: '25'
           RATE_LIMIT_DELAY: '2.0'
         run: python linkedin_cold_agent.py
