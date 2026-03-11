@@ -471,7 +471,7 @@ def ensure_output_tab(client: gspread.Client) -> gspread.Worksheet:
         logger.info("Found existing output tab '%s'", OUTPUT_SHEET_NAME)
         existing_headers = ws.row_values(1)
         if existing_headers != OUTPUT_HEADERS:
-            ws.update("A1", [OUTPUT_HEADERS])
+            ws.update(range_name="A1", values=[OUTPUT_HEADERS])
             logger.info("Updated output tab headers to match OUTPUT_HEADERS")
     except gspread.WorksheetNotFound:
         logger.info("Output tab '%s' not found — creating it", OUTPUT_SHEET_NAME)
@@ -593,7 +593,7 @@ def ensure_skipped_tab(client: gspread.Client) -> gspread.Worksheet:
         logger.info("Found existing skipped tab '%s'", SKIPPED_SHEET_NAME)
         existing_headers = ws.row_values(1)
         if existing_headers != SKIPPED_HEADERS:
-            ws.update("A1", [SKIPPED_HEADERS])
+            ws.update(range_name="A1", values=[SKIPPED_HEADERS])
             logger.info("Updated skipped tab headers to match SKIPPED_HEADERS")
     except gspread.WorksheetNotFound:
         ws = sh.add_worksheet(title=SKIPPED_SHEET_NAME, rows=5000, cols=len(SKIPPED_HEADERS))
@@ -832,16 +832,20 @@ def _parse_gemini_response(raw: str) -> tuple[str, str, str]:
 
     Returns sentinel strings on parse failure.
     """
-    # Split on the first "Score:" line to separate message from scorecard
-    parts = re.split(r"\n(?=Score:\s)", raw, maxsplit=1)
-    message_body = _strip_quotes(parts[0].strip())
-
-    scorecard = parts[1] if len(parts) > 1 else ""
+    # Split on the first "\nScore:" occurrence to separate message from scorecard
+    score_idx = raw.find("\nScore:")
+    if score_idx != -1:
+        message_body = _strip_quotes(raw[:score_idx].strip())
+        scorecard = raw[score_idx:]
+    else:
+        message_body = _strip_quotes(raw.strip())
+        scorecard = ""
 
     score_match = re.search(r"Score:\s*([\d.]+/10)", scorecard)
     ai_score = score_match.group(1) if score_match else "(parse_failed)"
 
-    flag_match = re.search(r"Flag:\s*(SEND WITH CAUTION|DO NOT SEND|SEND)", scorecard)
+    # Handle both plain `Flag: SEND` and bracket-wrapped `Flag: [SEND]`
+    flag_match = re.search(r"Flag:\s*\[?(SEND WITH CAUTION|DO NOT SEND|SEND)\]?", scorecard)
     ai_flag = flag_match.group(1) if flag_match else "(parse_failed)"
 
     return message_body, ai_score, ai_flag
