@@ -452,7 +452,11 @@ def read_source_leads(client: gspread.Client) -> list[Lead]:
     logger.info("Opening spreadsheet '%s', tab '%s'", SPREADSHEET_ID, SOURCE_SHEET_NAME)
     sh = client.open_by_key(SPREADSHEET_ID)
     ws = sh.worksheet(SOURCE_SHEET_NAME)
-    records = ws.get_all_records()
+    rows = ws.get_all_values()
+    if not rows:
+        return []
+    headers = rows[0]
+    records = [dict(zip(headers, row)) for row in rows[1:] if any(row)]
     leads = [Lead.from_sheet_row(r) for r in records if r.get("Person Linkedin Url", "").strip()]
     logger.info("Read %d leads from '%s'", len(leads), SOURCE_SHEET_NAME)
     return leads
@@ -697,7 +701,7 @@ def score_lead(lead: Lead) -> int:
     """
     points = 0
     s = lead.seniority.lower()
-    if any(t in s for t in ("chief", "c-suite", "president", "owner", "founder")):
+    if any(t in s for t in ("chief", "c-suite", "c_suite", "president", "owner", "founder")):
         points += 30
     elif any(t in s for t in ("vp", "vice president")):
         points += 25

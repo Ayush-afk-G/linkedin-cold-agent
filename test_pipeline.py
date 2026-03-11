@@ -209,10 +209,10 @@ kw_pass = [
     make_lead(keywords="sports, league, broadcast", industry="Sports"),
     make_lead(keywords="media production, broadcasting", industry="Media"),
     make_lead(keywords="football, streaming", industry="Entertainment"),
-    make_lead(keywords="noc, olympic, athletics", industry="Other"),       # keyword match, no industry
-    make_lead(keywords="unrelated", industry="Sports"),                    # industry match, no keyword
 ]
 kw_fail = [
+    make_lead(keywords="noc, olympic, athletics", industry="Other"),       # keyword match, no industry match
+    make_lead(keywords="unrelated", industry="Sports"),                    # industry match, no keyword match
     make_lead(keywords="software, saas, b2b", industry="Technology"),
     make_lead(keywords="finance, banking", industry="Financial Services"),
     make_lead(keywords="", industry=""),
