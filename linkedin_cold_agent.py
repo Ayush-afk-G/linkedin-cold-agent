@@ -462,9 +462,9 @@ _KEYWORD_GATE_INDUSTRIES: set[str] = {
 
 
 def filter_by_keyword_gate(leads: list[Lead]) -> tuple[list[Lead], list[Lead]]:
-    """Filter leads by sports/media keyword or industry match.
+    """Filter leads by sports/media keyword and industry match.
 
-    PASS if the Keywords field contains any target keyword OR the Industry field
+    PASS if the Keywords field contains any target keyword AND the Industry field
     contains any target industry (case-insensitive). Returns (passed, skipped).
     """
     passed, skipped = [], []
@@ -473,7 +473,7 @@ def filter_by_keyword_gate(leads: list[Lead]) -> tuple[list[Lead], list[Lead]]:
         ind = lead.industry.lower()
         kw_match = any(k in kw for k in _KEYWORD_GATE_KEYWORDS)
         ind_match = any(i in ind for i in _KEYWORD_GATE_INDUSTRIES)
-        if kw_match or ind_match:
+        if kw_match and ind_match:
             passed.append(lead)
         else:
             skipped.append(lead)
