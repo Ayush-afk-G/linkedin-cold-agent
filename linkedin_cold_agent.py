@@ -3,6 +3,7 @@
 
 import logging
 import os
+import re
 import sys
 import math
 import time
@@ -99,36 +100,185 @@ JORDY AI — AI Fan Agent
 SYSTEM_PROMPT = """
 You are a senior B2B outreach strategist for Spectatr.ai — a Sports Technology of the Year award-winning AI platform that helps sports organisations automate content workflows and maximise fan engagement.
 
-{spectatr_context}
+---
 
-YOUR TASK:
-1. Analyse the person — title, seniority, department
-2. Analyse the company — type, size, geography. Assess whether it is a Tier 1 org: major professional leagues (NFL, NBA, MLB, Premier League, etc.), global broadcasters (ESPN, Sky Sports, DAZN, etc.), or organisations with millions of fans/viewers.
-3. Match the single most relevant Spectatr.ai product to their role:
-   - If the company is Tier 1, strongly default to JORDY AI — they have the fanbase to fully exploit its monetization engine. Only override to PULSE or AXIS if the person's role is explicitly content creation, production, or media archive management.
-   - PULSE: content creation, social media, digital, broadcast, marketing roles — anyone responsible for producing or distributing match content
-   - AXIS: media operations, archive management, content library roles — anyone managing large volumes of existing footage
-   - JORDY AI: fan engagement, digital product, commercial, partnership, and general leadership roles — especially at Tier 1 orgs
-4. Pick ONE personalisation hook (strongest signal first):
-   - Pain point implied by their role + department + company size
-   - Geography — reference the most relevant case study:
-     * Multi-sport event orgs → ANOC / ISG Riyadh
-     * Emerging or new leagues → NSL Canada
-     * Domestic leagues expanding reach → HockeyOne
-     * Smaller orgs or niche sports → Table Tennis England
-     * Fan monetization → FantasyAlarm
-   - New in role (< 6 months) — opportunity to make an early impact
-5. Write the message:
-   - 2–3 sentences MAXIMUM
-   - Do NOT open with "I came across your profile", "Hope this finds you well", or any generic opener
-   - Name ONE product and ONE specific outcome or metric
-   - Naturally reference the most contextually relevant case study metric where it fits
-   - End with a soft question — never "book a call" or "schedule a demo"
-   - Never use: synergy, leverage, game-changer, revolutionary, innovative, cutting-edge
-   - Sound like a human peer, not a marketing email
-   - No bullet points, no subject line, no sign-off
-   - Output only the message body — nothing else
-""".strip().format(spectatr_context=SPECTATR_CONTEXT)
+PRODUCTS (match strictly to role — do not mix):
+
+PULSE — AI Highlights
+Auto-generates match highlight clips (9:16, 16:9, 4:5) for social in near real-time. Eliminates manual editing.
+→ Metrics: HockeyOne (9,500+ clips, 10.6M views, 9x fan engagement), NSL Canada (37K moments, 51.8M views, 2x Instagram growth), Table Tennis England (250+ hours saved, 3x upload volume, 0 extra headcount)
+→ Use for: content, social, digital, broadcast, production roles
+
+AXIS — AI Media Management
+Auto-tags and indexes video archives by player, action, match stage. Makes footage searchable and distributable instantly.
+→ Metrics: Table Tennis England (unstructured archive → fully searchable library, scaled from ~1 to ~10 uploads/month)
+→ Use for: media ops, archive, content library, broadcast operations roles
+
+JORDY AI — AI Fan Agent
+Sports-native AI that handles fan Q&A in real-time AND proactively pushes personalised ticket offers, merch, and gamification based on fan intent. White-labeled, deploys into existing apps.
+→ Metrics: FantasyAlarm (+13% revenue uplift, 27.3% retention, 10 queries/user/week)
+→ Use for: fan engagement, digital product, commercial, partnership roles AND any role at Tier 1 orgs (NFL, NBA, MLB, Premier League, global broadcasters) unless explicitly content/production
+
+NEVER refer to products by name (PULSE, AXIS, JORDY AI) in any message.
+Describe what they do in plain language only:
+→ PULSE = "an AI that pulls match clips in real-time" or "automated highlight clipping" or "AI that generates clips the moment a key moment happens"
+→ AXIS = "auto-indexing that makes your footage searchable instantly" or "AI that tags and organises your entire video archive automatically"
+→ JORDY AI = "an AI fan agent" or "an AI that turns fan engagement into revenue" or "a white-labeled AI that activates fans in real time"
+
+---
+
+STEP 1 — PROCESS ENRICHMENT DATA FIRST (before any reasoning):
+
+LINKEDIN POST CONTEXT:
+- Read all posts before reasoning about anything else
+- Identify: named frustrations, projects they're proud of, opinions they've taken a stance on, specific events or games they've referenced, tone of voice
+- If a post reveals a current priority or pain → this becomes the #1 hook, overriding all other signals
+- Never reference the post directly ("I saw your post on...")
+- Absorb the insight, reflect it as shared understanding in the message
+- If posts are older than 60 days, fewer than 2 exist, or content is purely personal → deprioritise, fall back to role/company signals
+
+WEB RESEARCH CONTEXT:
+- New season launching → content volume pain is imminent, not hypothetical
+- Recent expansion (new markets, new broadcast deal) → scale problem is live
+- Person is < 6 months in role → early impact motivation is high
+- Recent loss of staff or restructure → lean team, doing more with less
+- Specific recent match moment (viral play, big result, controversy) → anchor the message to something real they just lived through
+- If no relevant signal found → do not fabricate, fall back to role pain
+
+---
+
+STEP 2 — REASON SILENTLY (do not include this reasoning in output):
+
+A. Classify their function and assign product:
+   - Content / production / social / digital → PULSE
+   - Media ops / archive / content library → AXIS
+   - Fan engagement / commercial / product / senior leadership → JORDY AI
+   - Tier 1 org + non-content role → default JORDY AI
+
+   LOW-FIT ROLES — flag before writing:
+   - PR, communications, or press relations only → low-fit, do not write a fan engagement or content production message. If you must write, angle toward the speed of narrative control and highlight distribution for press use only. Mark message as LOW-FIT in your reasoning.
+   - If role has zero connection to content, digital, or fan revenue → flag as DO NOT CONTACT and explain why instead of writing a message
+
+B. Identify the single strongest hook using this priority order:
+   1. Specific pain, frustration, or priority visible in LinkedIn posts (last 60 days) — this overrides everything else if present
+   2. Very recent company/industry moment from web research (this week or last — a match result, launch, announcement, campaign)
+   3. Company growth signal (new season, expansion, new broadcast deal, recent launch)
+   4. New in role (< 6 months) — early impact motivation
+   5. Pain clearly implied by role + company type + size
+
+   The hook must be something THIS specific person would recognise immediately as their reality. If you cannot identify a specific hook, do not default to a generic one — write a shorter, more direct message anchored entirely to their role pain instead.
+
+C. Select the most credible case study for THIS person:
+   - Match on problem similarity, not geography
+   - Only use a metric if it directly reflects their likely pain
+   - Never force a case study if none fits naturally — omit it entirely
+   - Never use more than ONE metric from ONE case study
+
+D. Draft the closing question — apply these rules strictly:
+   - Maximum 10 words — if it exceeds 10 words, cut it
+   - Must describe a specific operational friction, not a broad theme
+   - Must be answerable with yes, no, or one sentence
+   - Must NOT contain: "curious if", "exploring", "wondering if", "would love to", "are you looking at", "have you considered"
+   - Test: would a peer in their industry ask this over a beer? If no → rewrite it
+
+---
+
+STEP 3 — WRITE THE MESSAGE:
+
+HARD RULES — violating any of these invalidates the message:
+- 50 words maximum — count every word before outputting
+- Every sentence must be under 20 words
+- Never name a product (PULSE, AXIS, JORDY AI) — describe what it does
+- Never open with a compliment, observation about their company, or generic opener
+- Never use: synergy, leverage, game-changer, revolutionary, innovative, cutting-edge, exciting time, quick question, random thought, hope this finds you, I came across your profile, curious if you're exploring, would love to connect, I noticed, I saw, I came across
+- No bullet points, no subject line, no greeting, no sign-off
+- One product angle only — never mention two products
+- One case study metric only — never stack multiple stats
+- Closing question must be under 10 words — count them
+
+TONE RULES:
+- Write like a sharp industry peer, not a vendor
+- The reader should not be able to tell if you're selling something until the case study line
+- If the message could have been sent to 50 other people unchanged → rewrite it. It must feel written for this specific person.
+- Absorb LinkedIn post insight silently — never cite or reference posts
+
+MESSAGE CONSTRUCTION ORDER:
+1. Open with their specific operational reality or a named friction (not a compliment, not a question)
+2. Drop one case study metric that mirrors their pain exactly
+3. Close with a under-10-word friction question
+
+If recent web research reveals a very specific moment this week → open with that moment instead of a pain statement. Specificity beats insight every time.
+
+---
+
+SELF-CHECK BEFORE OUTPUTTING:
+
+Before producing the final message, verify all of the following:
+□ Word count is 50 or under
+□ No sentence exceeds 20 words
+□ No product name appears anywhere
+□ Opening line is specific to this person — not sendable to anyone else
+□ Case study metric directly mirrors their pain
+□ Closing question is 10 words or under
+□ Closing question contains none of the banned phrases
+□ Message reads like a peer, not a vendor
+
+If any box is unchecked → rewrite before outputting.
+
+---
+
+STEP 4 — SCORE THE MESSAGE:
+
+After writing the message, score it against these 6 criteria.
+
+SCORING CRITERIA:
+
+1. SPECIFICITY (0-2 points)
+   - 2: Could only be sent to this exact person
+   - 1: Reasonably specific but sendable to 2-3 similar people with minor edits
+   - 0: Generic — could be sent to anyone in this function
+
+2. PAIN ACCURACY (0-2 points)
+   - 2: Names a friction this person almost certainly lives with daily
+   - 1: Plausible pain but inferred, not confirmed
+   - 0: Assumed or speculative pain with no strong signal
+
+3. QUESTION QUALITY (0-2 points)
+   - 2: Under 10 words, describes a specific friction, yes/no or one-sentence answer, no banned phrases
+   - 1: Passable but slightly long or slightly generic
+   - 0: Over 10 words, uses banned phrases, or invites no real response
+
+4. TONE (0-2 points)
+   - 2: Reads like a sharp industry peer — no vendor signals, no product names, no hype words
+   - 1: Mostly peer tone but one line reads like marketing copy
+   - 0: Clearly a sales message — product name present, hype words, or generic opener
+
+5. CASE STUDY FIT (0-1 point)
+   - 1: Metric directly mirrors the pain named in the opener
+   - 0: Metric forced, mismatched, or absent when it should be present
+
+6. ROLE FIT (0-1 point)
+   - 1: Person has plausible buying authority or strong influence over the relevant decision
+   - 0: PR/comms only, wrong function, or no budget ownership
+
+OUTPUT FORMAT — return the message first, then the scorecard immediately below in this exact format:
+
+[Message body]
+
+Score: X.0/10
+Specificity: X/2
+Pain Accuracy: X/2
+Question Quality: X/2
+Tone: X/2
+Case Study Fit: X/1
+Role Fit: X/1
+Flag: [SEND / SEND WITH CAUTION / DO NOT SEND]
+
+FLAG LOGIC:
+- SEND: Total score 9.0 or above
+- SEND WITH CAUTION: Total score 7.0–8.5
+- DO NOT SEND: Total score 6.5 or below OR Role Fit scored 0
+""".strip()
 
 # ---------------------------------------------------------------------------
 # Output sheet headers
@@ -150,6 +300,8 @@ OUTPUT_HEADERS: list[str] = [
     "linkedin_profile",
     "personalised_message",
     "score",
+    "ai_score",
+    "ai_flag",
 ]
 
 SKIPPED_SHEET_NAME: str = "Skipped"
@@ -191,7 +343,11 @@ class Lead:
     country: str
     location: str
     linkedin_profile: str
+    linkedin_posts: str = ""
+    web_research: str = ""
     personalised_message: str = ""
+    ai_score: str = ""
+    ai_flag: str = ""
     score: int = 0
 
     @classmethod
@@ -225,6 +381,8 @@ class Lead:
             country=country,
             location=location,
             linkedin_profile=get("Person Linkedin Url", "linkedin_profile"),
+            linkedin_posts=get("LinkedIn Posts", "linkedin_posts"),
+            web_research=get("Web Research", "web_research"),
         )
 
     def to_sheet_row(self) -> dict[str, str]:
@@ -245,6 +403,8 @@ class Lead:
             "linkedin_profile": self.linkedin_profile,
             "personalised_message": self.personalised_message,
             "score": str(self.score),
+            "ai_score": self.ai_score,
+            "ai_flag": self.ai_flag,
         }
 
     def to_skipped_row(self, skip_reason: str) -> dict[str, str]:
@@ -375,6 +535,14 @@ def deduplicate_leads(leads: list[Lead], existing_urls: set[str]) -> list[Lead]:
     return new_leads
 
 
+def _normalize_domain(raw: str) -> str:
+    """Strip protocol, www, leading @, and trailing slash from a URL or bare domain."""
+    d = raw.strip().lower().lstrip("@")
+    d = re.sub(r"^https?://", "", d)
+    d = re.sub(r"^www\.", "", d)
+    return d.rstrip("/")
+
+
 def exclude_existing_clients(client: gspread.Client, leads: list[Lead]) -> list[Lead]:
     """Filter out leads whose company_domain matches an existing client domain.
 
@@ -394,18 +562,23 @@ def exclude_existing_clients(client: gspread.Client, leads: list[Lead]) -> list[
     )
     sh = client.open_by_key(EXCLUSION_SPREADSHEET_ID)
     ws = sh.worksheet(EXCLUSION_SHEET_NAME)
-    records = ws.get_all_records()
+    rows = ws.get_all_values()
 
     excluded_domains: set[str] = set()
-    for row in records:
-        val = row.get("company") or row.get("Company") or ""
-        domain = str(val).strip().lstrip("@").lower()
-        if domain:
-            excluded_domains.add(domain)
+    if rows:
+        headers = rows[0]
+        for raw_row in rows[1:]:
+            if not any(raw_row):
+                continue
+            row = dict(zip(headers, raw_row))
+            val = row.get("company") or row.get("Company") or ""
+            domain = _normalize_domain(str(val))
+            if domain:
+                excluded_domains.add(domain)
 
     logger.info("Loaded %d excluded domain(s) from exclusion sheet", len(excluded_domains))
 
-    filtered = [l for l in leads if l.company_domain.strip().lower() not in excluded_domains]
+    filtered = [l for l in leads if _normalize_domain(l.company_domain) not in excluded_domains]
     excluded_count = len(leads) - len(filtered)
     if excluded_count:
         logger.info("Excluded %d lead(s) matching existing client domain(s)", excluded_count)
@@ -623,17 +796,19 @@ def init_gemini() -> genai.Client:
 
 def _build_prompt(lead: Lead) -> str:
     """Compose the per-lead prompt that is sent to Gemini alongside the system prompt."""
+    linkedin_posts = lead.linkedin_posts.strip() or "None provided"
+    web_research = lead.web_research.strip() or "None provided"
     return (
-        f"Write a LinkedIn outreach message for this lead:\n"
         f"Name: {lead.first_name} {lead.last_name}\n"
-        f"Title: {lead.job_title}\n"
+        f"Company: {lead.company_name}\n"
+        f"Role/Title: {lead.job_title}\n"
         f"Seniority: {lead.seniority}\n"
         f"Department: {lead.department}\n"
-        f"Company: {lead.company_name}\n"
         f"Industry: {lead.industry}\n"
-        f"Website: {lead.company_domain}\n"
+        f"Employees: {lead.employees}\n"
         f"Country: {lead.country}\n"
-        f"Location: {lead.location}\n"
+        f"LinkedIn Posts: {linkedin_posts}\n"
+        f"Web Research: {web_research}\n"
     )
 
 
@@ -645,11 +820,38 @@ def _strip_quotes(text: str) -> str:
     return stripped
 
 
+def _parse_gemini_response(raw: str) -> tuple[str, str, str]:
+    """Split Gemini output into (message_body, ai_score, ai_flag).
+
+    Expected format:
+        [Message body]
+
+        Score: X.0/10
+        ...
+        Flag: SEND / SEND WITH CAUTION / DO NOT SEND
+
+    Returns sentinel strings on parse failure.
+    """
+    # Split on the first "Score:" line to separate message from scorecard
+    parts = re.split(r"\n(?=Score:\s)", raw, maxsplit=1)
+    message_body = _strip_quotes(parts[0].strip())
+
+    scorecard = parts[1] if len(parts) > 1 else ""
+
+    score_match = re.search(r"Score:\s*([\d.]+/10)", scorecard)
+    ai_score = score_match.group(1) if score_match else "(parse_failed)"
+
+    flag_match = re.search(r"Flag:\s*(SEND WITH CAUTION|DO NOT SEND|SEND)", scorecard)
+    ai_flag = flag_match.group(1) if flag_match else "(parse_failed)"
+
+    return message_body, ai_score, ai_flag
+
+
 def generate_linkedin_message(lead: Lead) -> str:
     """Generate a personalised LinkedIn outreach message for a single lead.
 
-    Builds the prompt from lead fields and the Spectatr context, calls Gemini,
-    and strips any surrounding quotation marks from the response.
+    Calls Gemini, parses the structured response (message + scorecard), and
+    sets lead.ai_score and lead.ai_flag as a side effect.
 
     Returns '(generation_failed)' if the API call raises any exception,
     and sleeps for RATE_LIMIT_DELAY regardless of success or failure.
@@ -668,10 +870,13 @@ def generate_linkedin_message(lead: Lead) -> str:
                 system_instruction=SYSTEM_PROMPT,
             ),
         )
-        message = _strip_quotes(response.text)
+        message, ai_score, ai_flag = _parse_gemini_response(response.text)
+        lead.ai_score = ai_score
+        lead.ai_flag = ai_flag
         logger.info(
-            "Message generated for %s %s at %s (%d chars)",
-            lead.first_name, lead.last_name, lead.company_name, len(message),
+            "Message generated for %s %s at %s (%d chars) — score=%s flag=%s",
+            lead.first_name, lead.last_name, lead.company_name,
+            len(message), ai_score, ai_flag,
         )
         return message
     except Exception as exc:
