@@ -485,13 +485,14 @@ def filter_by_keyword_gate(leads: list[Lead]) -> tuple[list[Lead], list[Lead]]:
 
 
 _TARGET_DEPARTMENTS: set[str] = {
-    "content", "marketing", "digital", "innovation", "tech",
-    "product", "media", "communications", "brand", "growth",
+    "content", "marketing", "digital", "innovation", "tech", "technology",
+    "product", "strategy", "media", "communications", "brand", "growth",
+    "c_suite",  # Apollo labels C-suite executives' dept as "c_suite"
 }
 
 _TARGET_SENIORITY: set[str] = {
     "vp", "vice president", "director", "head", "chief",
-    "c-level", "owner", "founder", "president", "partner", "managing",
+    "c-level", "c_suite", "owner", "founder", "president", "partner", "managing",
 }
 
 
