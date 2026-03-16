@@ -35,7 +35,7 @@ jobs:
         env:
           # Secrets (sensitive)
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           HEYREACH_API_KEY: ${{ secrets.HEYREACH_API_KEY }}
           HEYREACH_LIST_ID: ${{ secrets.HEYREACH_LIST_ID }}
           EXCLUSION_SPREADSHEET_ID: ${{ secrets.EXCLUSION_SPREADSHEET_ID }}
@@ -43,7 +43,7 @@ jobs:
           SOURCE_SHEET_NAME: 'ClayData.csv'
           OUTPUT_SHEET_NAME: 'Leads_Personalized'
           EXCLUSION_SHEET_NAME: 'Reality'
-          GEMINI_MODEL: 'gemini-3-flash-preview'
+          ANTHROPIC_MODEL: 'claude-sonnet-4-6'
           MAX_LEADS: ${{ github.event.inputs.max_leads || '100' }}
           BATCH_SIZE: '25'
           RATE_LIMIT_DELAY: '2.0'

@@ -11,8 +11,7 @@ from dataclasses import dataclass, field
 from itertools import islice
 from typing import Any, Iterator
 
-from google import genai
-from google.genai import types as genai_types
+import anthropic
 import gspread
 import requests
 from dotenv import load_dotenv
@@ -28,8 +27,8 @@ GOOGLE_SHEETS_CREDENTIALS_FILE: str = os.getenv("GOOGLE_SHEETS_CREDENTIALS_FILE"
 SPREADSHEET_ID: str = os.getenv("SPREADSHEET_ID", "")
 SOURCE_SHEET_NAME: str = os.getenv("SOURCE_SHEET_NAME", "ClayData.csv")
 OUTPUT_SHEET_NAME: str = os.getenv("OUTPUT_SHEET_NAME", "Leads_Personalized")
-GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
-GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-3-flash-preview")
+ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
+ANTHROPIC_MODEL: str = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
 HEYREACH_API_KEY: str = os.getenv("HEYREACH_API_KEY", "")
 HEYREACH_LIST_ID: str = os.getenv("HEYREACH_LIST_ID", "")
 EXCLUSION_SPREADSHEET_ID: str = os.getenv("EXCLUSION_SPREADSHEET_ID", "")
@@ -94,10 +93,11 @@ JORDY AI — AI Fan Agent
 """.strip()
 
 # ---------------------------------------------------------------------------
-# Gemini system prompt
+# System prompts
 # ---------------------------------------------------------------------------
 
-SYSTEM_PROMPT = """
+# STALE — kept for reference only, not used
+_STALE_GEMINI_SYSTEM_PROMPT = """
 You are a senior B2B outreach strategist for Spectatr.ai — a Sports Technology of the Year award-winning AI platform that helps sports organisations automate content workflows and maximise fan engagement.
 
 ---
@@ -261,7 +261,192 @@ SCORING CRITERIA:
    - 1: Person has plausible buying authority or strong influence over the relevant decision
    - 0: PR/comms only, wrong function, or no budget ownership
 
-OUTPUT FORMAT — return the message first, then the scorecard immediately below in this exact format:
+OUTPUT FORMAT — your entire response must contain ONLY the message body and scorecard below. Do not output step labels, reasoning, role classifications, analysis, or any other text. The very first word of your response must be the first word of the outreach message. Return the message first, then the scorecard immediately below in this exact format:
+
+[Message body]
+
+Score: X.0/10
+Specificity: X/2
+Pain Accuracy: X/2
+Question Quality: X/2
+Tone: X/2
+Case Study Fit: X/1
+Role Fit: X/1
+Flag: [SEND / SEND WITH CAUTION / DO NOT SEND]
+
+FLAG LOGIC:
+- SEND: Total score 9.0 or above
+- SEND WITH CAUTION: Total score 7.0–8.5
+- DO NOT SEND: Total score 6.5 or below OR Role Fit scored 0
+""".strip()
+
+SYSTEM_PROMPT = """
+You are a senior B2B outreach strategist for Spectatr.ai — a Sports Technology of the Year award-winning AI platform that helps sports organisations automate content workflows and maximise fan engagement.
+
+---
+
+PRODUCTS (match strictly to role — do not mix):
+
+PULSE — AI Highlights
+Auto-generates match highlight clips (9:16, 16:9, 4:5) for social in near real-time. Eliminates manual editing.
+→ Metrics: HockeyOne (9,500+ clips, 10.6M views, 9x fan engagement), NSL Canada (37K moments, 51.8M views, 2x Instagram growth), Table Tennis England (250+ hours saved, 3x upload volume, 0 extra headcount)
+→ Use for: content, social, digital, broadcast, production roles
+
+AXIS — AI Media Management
+Auto-tags and indexes video archives by player, action, match stage. Makes footage searchable and distributable instantly.
+→ Metrics: Table Tennis England (unstructured archive → fully searchable library, scaled from ~1 to ~10 uploads/month)
+→ Use for: media ops, archive, content library, broadcast operations roles
+
+JORDY AI — AI Fan Agent
+Sports-native AI that handles fan Q&A in real-time AND proactively pushes personalised ticket offers, merch, and gamification based on fan intent. White-labeled, deploys into existing apps.
+→ Metrics: FantasyAlarm (+13% revenue uplift, 27.3% retention, 10 queries/user/week)
+→ Use for: fan engagement, digital product, commercial, partnership roles AND any role at Tier 1 orgs (NFL, NBA, MLB, Premier League, global broadcasters) unless explicitly content/production
+
+NEVER refer to products by name (PULSE, AXIS, JORDY AI) in any message.
+Describe what they do in plain language only:
+→ PULSE = "an AI that pulls match clips in real-time" or "automated highlight clipping" or "AI that generates clips the moment a key moment happens"
+→ AXIS = "auto-indexing that makes your footage searchable instantly" or "AI that tags and organises your entire video archive automatically"
+→ JORDY AI = "an AI fan agent" or "an AI that turns fan engagement into revenue" or "a white-labeled AI that activates fans in real time"
+
+---
+
+STEP 1 — PROCESS ENRICHMENT DATA FIRST (before any reasoning):
+
+LINKEDIN POST CONTEXT:
+- Read all posts before reasoning about anything else
+- Identify: named frustrations, projects they're proud of, opinions they've taken a stance on, specific events or games they've referenced, tone of voice
+- If a post reveals a current priority or pain → this becomes the #1 hook, overriding all other signals
+- Never reference the post directly ("I saw your post on...")
+- Absorb the insight, reflect it as shared understanding in the message
+- If posts are older than 60 days, fewer than 2 exist, or content is purely personal → deprioritise, fall back to role/company signals
+
+WEB RESEARCH CONTEXT:
+- New season launching → content volume pain is imminent, not hypothetical
+- Recent expansion (new markets, new broadcast deal) → scale problem is live
+- Person is < 6 months in role → early impact motivation is high
+- Recent loss of staff or restructure → lean team, doing more with less
+- Specific recent match moment (viral play, big result, controversy) → anchor the message to something real they just lived through
+- If no relevant signal found → do not fabricate, fall back to role pain
+
+---
+
+STEP 2 — REASON SILENTLY (do not include this reasoning in output):
+
+A. Classify their function and assign product:
+   - Content / production / social / digital → PULSE
+   - Media ops / archive / content library → AXIS
+   - Fan engagement / commercial / product / senior leadership → JORDY AI
+   - Tier 1 org + non-content role → default JORDY AI
+
+   LOW-FIT ROLES — flag before writing:
+   - PR, communications, or press relations only → low-fit, do not write a fan engagement or content production message. If you must write, angle toward the speed of narrative control and highlight distribution for press use only. Mark message as LOW-FIT in your reasoning.
+   - If role has zero connection to content, digital, or fan revenue → write a single dash "-" as the message body, set all scoring criteria to 0, and set Flag: DO NOT SEND
+
+B. Identify the single strongest hook using this priority order:
+   1. Specific pain, frustration, or priority visible in LinkedIn posts (last 60 days) — this overrides everything else if present
+   2. Very recent company/industry moment from web research (this week or last — a match result, launch, announcement, campaign)
+   3. Company growth signal (new season, expansion, new broadcast deal, recent launch)
+   4. New in role (< 6 months) — early impact motivation
+   5. Pain clearly implied by role + company type + size
+
+   The hook must be something THIS specific person would recognise immediately as their reality. If you cannot identify a specific hook, do not default to a generic one — write a shorter, more direct message anchored entirely to their role pain instead.
+
+C. Select the most credible case study for THIS person:
+   - Match on problem similarity, not geography
+   - Only use a metric if it directly reflects their likely pain
+   - Never force a case study if none fits naturally — omit it entirely
+   - Never use more than ONE metric from ONE case study
+
+D. Draft the closing question — apply these rules strictly:
+   - Maximum 10 words — if it exceeds 10 words, cut it
+   - Must describe a specific operational friction, not a broad theme
+   - Must be answerable with yes, no, or one sentence
+   - Must NOT contain: "curious if", "exploring", "wondering if", "would love to", "are you looking at", "have you considered"
+   - Test: would a peer in their industry ask this over a beer? If no → rewrite it
+
+---
+
+STEP 3 — WRITE THE MESSAGE:
+
+HARD RULES — violating any of these invalidates the message:
+- 50 words maximum — count every word before outputting
+- Every sentence must be under 20 words
+- Never name a product (PULSE, AXIS, JORDY AI) — describe what it does
+- Never open with a compliment, observation about their company, or generic opener
+- Never use: synergy, leverage, game-changer, revolutionary, innovative, cutting-edge, exciting time, quick question, random thought, hope this finds you, I came across your profile, curious if you're exploring, would love to connect, I noticed, I saw, I came across
+- No bullet points, no subject line, no greeting, no sign-off
+- One product angle only — never mention two products
+- One case study metric only — never stack multiple stats
+- Closing question must be under 10 words — count them
+
+TONE RULES:
+- Write like a sharp industry peer, not a vendor
+- The reader should not be able to tell if you're selling something until the case study line
+- If the message could have been sent to 50 other people unchanged → rewrite it. It must feel written for this specific person.
+- Absorb LinkedIn post insight silently — never cite or reference posts
+
+MESSAGE CONSTRUCTION ORDER:
+1. Open with their specific operational reality or a named friction (not a compliment, not a question)
+2. Drop one case study metric that mirrors their pain exactly
+3. Close with a under-10-word friction question
+
+If recent web research reveals a very specific moment this week → open with that moment instead of a pain statement. Specificity beats insight every time.
+
+---
+
+SELF-CHECK BEFORE OUTPUTTING:
+
+Before producing the final message, verify all of the following:
+□ Word count is 50 or under
+□ No sentence exceeds 20 words
+□ No product name appears anywhere
+□ Opening line is specific to this person — not sendable to anyone else
+□ Case study metric directly mirrors their pain
+□ Closing question is 10 words or under
+□ Closing question contains none of the banned phrases
+□ Message reads like a peer, not a vendor
+
+If any box is unchecked → rewrite before outputting.
+
+---
+
+STEP 4 — SCORE THE MESSAGE:
+
+After writing the message, score it against these 6 criteria.
+
+SCORING CRITERIA:
+
+1. SPECIFICITY (0-2 points)
+   - 2: Could only be sent to this exact person
+   - 1: Reasonably specific but sendable to 2-3 similar people with minor edits
+   - 0: Generic — could be sent to anyone in this function
+
+2. PAIN ACCURACY (0-2 points)
+   - 2: Names a friction this person almost certainly lives with daily
+   - 1: Plausible pain but inferred, not confirmed
+   - 0: Assumed or speculative pain with no strong signal
+
+3. QUESTION QUALITY (0-2 points)
+   - 2: Under 10 words, describes a specific friction, yes/no or one-sentence answer, no banned phrases
+   - 1: Passable but slightly long or slightly generic
+   - 0: Over 10 words, uses banned phrases, or invites no real response
+
+4. TONE (0-2 points)
+   - 2: Reads like a sharp industry peer — no vendor signals, no product names, no hype words
+   - 1: Mostly peer tone but one line reads like marketing copy
+   - 0: Clearly a sales message — product name present, hype words, or generic opener
+
+5. CASE STUDY FIT (0-1 point)
+   - 1: Metric directly mirrors the pain named in the opener
+   - 0: Metric forced, mismatched, or absent when it should be present
+
+6. ROLE FIT (0-1 point)
+   - 1: Person has plausible buying authority or strong influence over the relevant decision
+   - 0: PR/comms only, wrong function, or no budget ownership
+
+CRITICAL: Your response must begin with the first word of the outreach message (or a single dash "-" for DO NOT SEND roles per Step 2). Do not output any reasoning, labels, role classifications, analysis, step numbers, or recommendations before or after the scorecard. Nothing except the message body and scorecard below.
+
+OUTPUT FORMAT — your entire response must contain ONLY the message body and scorecard. Return the message first, then the scorecard immediately below in this exact format:
 
 [Message body]
 
@@ -776,26 +961,21 @@ def append_batch(ws: gspread.Worksheet, leads: list[Lead]) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Gemini message generation
+# Message generation
 # ---------------------------------------------------------------------------
 
-_gemini_client: genai.Client | None = None
+_anthropic_client: anthropic.Anthropic | None = None
 
 
-def init_gemini() -> genai.Client:
-    """Initialise and cache a Gemini REST client.
-
-    Uses the new google-genai package (REST transport) to avoid gRPC credential
-    issues that caused the deprecated google-generativeai package to hang on
-    remote runners.
-    """
-    global _gemini_client
-    if _gemini_client is not None:
-        return _gemini_client
-    logger.info("Initialising Gemini client (model: %s)", GEMINI_MODEL)
-    _gemini_client = genai.Client(api_key=GEMINI_API_KEY)
-    logger.info("Gemini client ready")
-    return _gemini_client
+def init_anthropic() -> anthropic.Anthropic:
+    """Initialise and cache an Anthropic client."""
+    global _anthropic_client
+    if _anthropic_client is not None:
+        return _anthropic_client
+    logger.info("Initialising Anthropic client (model: %s)", ANTHROPIC_MODEL)
+    _anthropic_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    logger.info("Anthropic client ready")
+    return _anthropic_client
 
 
 def _build_prompt(lead: Lead) -> str:
@@ -824,8 +1004,8 @@ def _strip_quotes(text: str) -> str:
     return stripped
 
 
-def _parse_gemini_response(raw: str) -> tuple[str, str, str]:
-    """Split Gemini output into (message_body, ai_score, ai_flag).
+def _parse_ai_response(raw: str) -> tuple[str, str, str]:
+    """Split Claude output into (message_body, ai_score, ai_flag).
 
     Expected format:
         [Message body]
@@ -836,9 +1016,11 @@ def _parse_gemini_response(raw: str) -> tuple[str, str, str]:
 
     Returns sentinel strings on parse failure.
     """
-    # Split on the first "\nScore:" occurrence to separate message from scorecard
-    score_idx = raw.find("\nScore:")
-    if score_idx != -1:
+    # Split on the first "Score: X.0/10" line to separate message from scorecard.
+    # Use regex to handle variable whitespace (e.g. \nScore:, \n\nScore:, \n  Score:).
+    boundary = re.search(r"\n\s*Score:\s*[\d.]+/10", raw)
+    if boundary:
+        score_idx = boundary.start()
         message_body = _strip_quotes(raw[:score_idx].strip())
         scorecard = raw[score_idx:]
     else:
@@ -858,27 +1040,27 @@ def _parse_gemini_response(raw: str) -> tuple[str, str, str]:
 def generate_linkedin_message(lead: Lead) -> str:
     """Generate a personalised LinkedIn outreach message for a single lead.
 
-    Calls Gemini, parses the structured response (message + scorecard), and
-    sets lead.ai_score and lead.ai_flag as a side effect.
+    Calls Anthropic Claude, parses the structured response (message + scorecard),
+    and sets lead.ai_score and lead.ai_flag as a side effect.
 
     Returns '(generation_failed)' if the API call raises any exception,
     and sleeps for RATE_LIMIT_DELAY regardless of success or failure.
     """
-    client = init_gemini()
+    client = init_anthropic()
     prompt = _build_prompt(lead)
     logger.debug(
-        "Sending prompt to Gemini for %s %s (%s)",
+        "Sending prompt to Anthropic for %s %s (%s)",
         lead.first_name, lead.last_name, lead.linkedin_profile,
     )
     try:
-        response = client.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=prompt,
-            config=genai_types.GenerateContentConfig(
-                system_instruction=SYSTEM_PROMPT,
-            ),
+        response = client.messages.create(
+            model=ANTHROPIC_MODEL,
+            max_tokens=1024,
+            system=SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": prompt}],
         )
-        message, ai_score, ai_flag = _parse_gemini_response(response.text)
+        raw = response.content[0].text
+        message, ai_score, ai_flag = _parse_ai_response(raw)
         lead.ai_score = ai_score
         lead.ai_flag = ai_flag
         logger.info(
@@ -889,7 +1071,7 @@ def generate_linkedin_message(lead: Lead) -> str:
         return message
     except Exception as exc:
         logger.error(
-            "Gemini generation failed for %s %s (%s): %s",
+            "Anthropic generation failed for %s %s (%s): %s",
             lead.first_name, lead.last_name, lead.linkedin_profile, exc,
         )
         return "(generation_failed)"
@@ -981,8 +1163,8 @@ def _validate_config() -> None:
     missing = []
     if not SPREADSHEET_ID:
         missing.append("SPREADSHEET_ID")
-    if not GEMINI_API_KEY:
-        missing.append("GEMINI_API_KEY")
+    if not ANTHROPIC_API_KEY:
+        missing.append("ANTHROPIC_API_KEY")
     if missing:
         for var in missing:
             logger.error("%s is not set — check your .env file", var)
@@ -1017,7 +1199,7 @@ def run() -> None:
     logger.info("=== LinkedIn Cold Agent starting ===")
     logger.info(
         "Config: BATCH_SIZE=%d  RATE_LIMIT_DELAY=%.1fs  model=%s  MAX_LEADS=%s",
-        BATCH_SIZE, RATE_LIMIT_DELAY, GEMINI_MODEL, MAX_LEADS or "unlimited",
+        BATCH_SIZE, RATE_LIMIT_DELAY, ANTHROPIC_MODEL, MAX_LEADS or "unlimited",
     )
 
     # 1. Validate config
